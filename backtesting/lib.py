@@ -18,6 +18,7 @@ from collections import OrderedDict
 from inspect import currentframe
 from itertools import chain, compress, count
 from numbers import Number
+from statistics import NormalDist
 from typing import Callable, Generator, Optional, Sequence, Union
 
 import numpy as np
@@ -25,6 +26,7 @@ import pandas as pd
 
 from ._plotting import plot_heatmaps as _plot_heatmaps
 from ._stats import compute_stats as _compute_stats
+from ._stats import periodic_returns as _periodic_returns
 from ._util import SharedMemoryManager, _Array, _as_str, _batch, _tqdm, patch
 from .backtesting import Backtest, Strategy
 
@@ -202,6 +204,85 @@ def compute_stats(
             equity.iloc[t.EntryBar:] += t.PnL
     return _compute_stats(trades=trades, equity=equity.values, ohlc_data=data,
                           risk_free_rate=risk_free_rate, strategy_instance=stats._strategy)
+
+
+def deflated_sharpe_ratio(stats: pd.Series,
+                          trial_sharpe_ratios: Union[pd.Series, Sequence[float]]) -> float:
+    """
+    Compute the [deflated Sharpe ratio] of the best run of
+    `backtesting.backtesting.Backtest.optimize` — the probability [0, 1]
+    that its Sharpe ratio is greater than zero after correcting for the
+    multiple testing inherent to parameter optimization: the best of `N`
+    tried parameter combinations is expected to show a positive Sharpe
+    ratio by pure chance, and the more combinations are tried, the higher
+    that hurdle.
+
+    [deflated Sharpe ratio]: https://doi.org/10.3905/jpm.2014.40.5.094
+
+    `stats` is the result series of the best run, as returned by
+    `Backtest.optimize(maximize='Sharpe Ratio')`.
+
+    `trial_sharpe_ratios` are annualized Sharpe ratios of **all** tried
+    parameter combinations, such as the heatmap returned by
+    `Backtest.optimize(maximize='Sharpe Ratio', return_heatmap=True)`.
+    The number of trials and their Sharpe ratio dispersion — which set
+    the chance hurdle — are taken from it directly.
+
+        >>> stats, heatmap = bt.optimize(fast=range(5, 30, 5), slow=range(10, 70, 5),
+        ...                              maximize='Sharpe Ratio', return_heatmap=True)
+        >>> deflated_sharpe_ratio(stats, heatmap)
+        0.97
+
+    Values close to 1 mean the best run's Sharpe ratio clears the bar its
+    own search sets by chance; values below ~0.95 suggest the "best"
+    result may be an artifact of trying many combinations (overfitting).
+
+    Based on Bailey & López de Prado (2014),
+    "The Deflated Sharpe Ratio: Correcting for Selection Bias,
+    Backtest Overfitting, and Non-Normality". The number of trials is
+    taken as `len(trial_sharpe_ratios)`; where trials are strongly
+    correlated (e.g. a dense grid of similar parameters), the effective
+    number of independent trials is lower and this estimate is
+    accordingly conservative.
+    """
+    name = getattr(trial_sharpe_ratios, 'name', None)
+    if name is not None and name != 'Sharpe Ratio':
+        warnings.warn(
+            f"`trial_sharpe_ratios` appears to contain {name!r} values, not Sharpe ratios. "
+            "Pass the heatmap from optimize(maximize='Sharpe Ratio', return_heatmap=True).",
+            stacklevel=2)
+
+    equity = stats['_equity_curve']['Equity']
+    if not isinstance(equity.index, pd.DatetimeIndex):
+        raise ValueError('deflated_sharpe_ratio requires datetime-indexed data')
+    returns, annual_trading_days = _periodic_returns(equity)
+    annualization = np.sqrt(annual_trading_days)
+    sr = stats['Sharpe Ratio'] / annualization  # Per-period Sharpe ratio
+    trial_srs = pd.Series(np.asarray(trial_sharpe_ratios, dtype=float)).dropna() / annualization
+
+    n_periods = len(returns)
+    if not sr or np.isnan(sr) or n_periods < 2:
+        return np.nan
+
+    # Expected maximum Sharpe ratio of `n_trials` skill-less trials
+    # (Bailey & López de Prado 2014, eq. for E[max SR_n] under the null)
+    norm = NormalDist()
+    n_trials = len(trial_srs)
+    trials_sr_std = trial_srs.std(ddof=1)
+    if n_trials > 1 and trials_sr_std > 0:
+        sr0 = trials_sr_std * ((1 - np.euler_gamma) * norm.inv_cdf(1 - 1 / n_trials) +
+                               np.euler_gamma * norm.inv_cdf(1 - 1 / (n_trials * np.e)))
+    else:
+        sr0 = 0  # Single trial; reduces to the probabilistic Sharpe ratio
+
+    # Probabilistic Sharpe ratio of the winner vs. the chance hurdle,
+    # adjusted for non-normality of its returns
+    skew = returns.skew()
+    kurtosis = returns.kurt() + 3  # Pandas reports excess kurtosis
+    variance_adj = 1 - skew * sr + (kurtosis - 1) / 4 * sr**2
+    if not variance_adj > 0:
+        return np.nan
+    return norm.cdf((sr - sr0) * np.sqrt(n_periods - 1) / np.sqrt(variance_adj))
 
 
 def resample_apply(rule: str,

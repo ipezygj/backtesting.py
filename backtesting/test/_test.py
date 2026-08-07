@@ -27,6 +27,7 @@ from backtesting.lib import (
     compute_stats,
     cross,
     crossover,
+    deflated_sharpe_ratio,
     plot_heatmaps,
     quantile,
     random_ohlc_data,
@@ -996,6 +997,18 @@ class TestLib(TestCase):
         self.assertEqual(list(new_data.index), list(GOOG.index))
         self.assertEqual(new_data.shape, GOOG.shape)
         self.assertEqual(list(new_data.columns), list(GOOG.columns))
+
+    def test_deflated_sharpe_ratio(self):
+        bt = Backtest(GOOG, SmaCross)
+        stats, heatmap = bt.optimize(fast=range(5, 30, 5), slow=range(10, 70, 10),
+                                     maximize='Sharpe Ratio', return_heatmap=True)
+        dsr = deflated_sharpe_ratio(stats, heatmap)
+        self.assertTrue(0 <= dsr <= 1)
+        # More trials set a higher chance hurdle than the single winning trial alone
+        self.assertLessEqual(dsr, deflated_sharpe_ratio(stats, [stats['Sharpe Ratio']]))
+
+        with self.assertWarnsRegex(UserWarning, 'not Sharpe ratios'):
+            deflated_sharpe_ratio(stats, heatmap.rename('SQN'))
 
     def test_compute_stats(self):
         stats = Backtest(GOOG, SmaCross).run()
