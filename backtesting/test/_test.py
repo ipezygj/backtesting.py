@@ -1017,7 +1017,7 @@ class TestLib(TestCase):
         # the deflation arithmetic, which answered 1.0 -- certainty of an edge, from
         # the one input that cannot show one.
         index = pd.date_range('2020-01-01', periods=250, freq='D')
-        for rate in (1.001, 1.0):
+        for rate in (1.0000001, 1.0001, 1.001, 1.01, 1.05, 0.99, 1.0):
             equity = pd.Series(np.full(250, 1e4) * rate ** np.arange(250), index=index)
             stats = pd.Series({'Sharpe Ratio': 3.0,
                                '_equity_curve': pd.DataFrame({'Equity': equity})})

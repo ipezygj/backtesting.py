@@ -273,7 +273,7 @@ def deflated_sharpe_ratio(stats: pd.Series,
     # residue is of the order of an ulp of 1.0: measured at 0.44-0.61 eps for constant
     # rates from -1% to +5% and lengths 50-3000, against 4e7 eps for a real series with
     # sigma=1e-8. One eps separates them with seven orders of magnitude to spare.
-    if not returns.std(ddof=1) > np.finfo(float).eps * max(1.0, returns.abs().max()):
+    if not returns.std(ddof=1) > n_periods * np.finfo(float).eps * max(1.0, returns.abs().max()):
         return np.nan
 
     # Expected maximum Sharpe ratio of `n_trials` skill-less trials
