@@ -1010,6 +1010,28 @@ class TestLib(TestCase):
         with self.assertWarnsRegex(UserWarning, 'not Sharpe ratios'):
             deflated_sharpe_ratio(stats, heatmap.rename('SQN'))
 
+    def test_deflated_sharpe_ratio_zero_dispersion(self):
+        # An equity curve growing at a constant rate has no dispersion, so no Sharpe
+        # ratio and no deflated one. Its standard deviation is floating-point residue
+        # rather than an exact zero, so the ratio comes out finite (~1e16) and reaches
+        # the deflation arithmetic, which answered 1.0 -- certainty of an edge, from
+        # the one input that cannot show one.
+        index = pd.date_range('2020-01-01', periods=250, freq='D')
+        for rate in (1.001, 1.0):
+            equity = pd.Series(np.full(250, 1e4) * rate ** np.arange(250), index=index)
+            stats = pd.Series({'Sharpe Ratio': 3.0,
+                               '_equity_curve': pd.DataFrame({'Equity': equity})})
+            self.assertTrue(np.isnan(deflated_sharpe_ratio(stats, [.5, 1., 1.5, 2.])))
+
+        # The guard is relative to the scale of the data: a real but very quiet
+        # series still gets a number.
+        quiet = pd.Series(
+            1e4 * np.cumprod(1 + np.random.default_rng(1).normal(0, 1e-8, 250)),
+            index=index)
+        stats = pd.Series({'Sharpe Ratio': 3.0,
+                           '_equity_curve': pd.DataFrame({'Equity': quiet})})
+        self.assertTrue(0 <= deflated_sharpe_ratio(stats, [.5, 1., 1.5, 2.]) <= 1)
+
     def test_compute_stats(self):
         stats = Backtest(GOOG, SmaCross).run()
         only_long_trades = stats._trades[stats._trades.Size > 0]

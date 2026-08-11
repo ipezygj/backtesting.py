@@ -264,6 +264,18 @@ def deflated_sharpe_ratio(stats: pd.Series,
     if not sr or np.isnan(sr) or n_periods < 2:
         return np.nan
 
+    # A return series with no dispersion has no Sharpe ratio, but it does not arrive
+    # here as a nan: an equity curve growing at a constant rate yields returns whose
+    # standard deviation is floating-point residue rather than an exact zero, so it
+    # divides out to a Sharpe of ~1e13 -- finite, and therefore past the check above.
+    # Deflating that returned 1.0, i.e. certainty of a real edge, for the one input
+    # carrying no information about one. These returns are ratios of floats, so the
+    # residue is of the order of an ulp of 1.0: measured at 0.44-0.61 eps for constant
+    # rates from -1% to +5% and lengths 50-3000, against 4e7 eps for a real series with
+    # sigma=1e-8. One eps separates them with seven orders of magnitude to spare.
+    if not returns.std(ddof=1) > np.finfo(float).eps * max(1.0, returns.abs().max()):
+        return np.nan
+
     # Expected maximum Sharpe ratio of `n_trials` skill-less trials
     # (Bailey & López de Prado 2014, eq. for E[max SR_n] under the null)
     norm = NormalDist()
